@@ -1,11 +1,15 @@
 #!/bin/bash
 
 # ========================================================
-# TASK 1.4 - AUTOMATED VTM ENCODING SCRIPT (DRY RUN)
+# TASK 1.4 - AUTOMATED VTM ENCODING SCRIPT
+# Run this script from the ROOT directory!
+# Command: bash backend/run_task_1_4.sh
 # ========================================================
 
-# Array containing the target video sequence (Only 'foreman' for testing)
-VIDEOS=("foreman")
+OUTPUT_DIR="samples/sample2"
+
+# Array containing the target video sequence
+VIDEOS=("akiyo_cif")
 
 # Array containing the 4 standard Quantization Parameters (QP)
 QPS=(22 27 32 37)
@@ -13,6 +17,8 @@ QPS=(22 27 32 37)
 echo "========================================================"
 echo "[START] Executing Task 1.4 for Test Sequences..."
 echo "========================================================"
+
+mkdir -p ${OUTPUT_DIR}
 
 # Loop through each video sequence
 for VIDEO in "${VIDEOS[@]}"; do
@@ -22,27 +28,26 @@ for VIDEO in "${VIDEOS[@]}"; do
         echo "[PROCESSING] Video: ${VIDEO}.yuv | QP: ${QP}"
         echo "--------------------------------------------------------"
         
-        # Clear any residual log file from previous encoder runs
+        # Clear any residual log file from previous encoder runs in root
         rm -f partition_log.csv
         
         # Execute VTM EncoderApp
-        # Redirect stdout to a text file to capture PSNR, Bitrate, and Time data
-        ./bin/umake/gcc-13.3/x86_64/release/EncoderApp \
-            -c cfg/encoder_randomaccess_vtm.cfg \
-            -i ${VIDEO}.yuv \
-            -wdt 416 \
-            -hgt 240 \
+        ./backend/bin/EncoderApp \
+            -c ./backend/cfg/encoder_randomaccess_vtm.cfg \
+            -i ./${VIDEO}.yuv \
+            -wdt 352 \
+            -hgt 288\
             -fr 30 \
             -f 30 \
             -q ${QP} \
-            -b ${VIDEO}_qp${QP}.vvc > terminal_log_${VIDEO}_qp${QP}.txt
+            -b ${OUTPUT_DIR}/${VIDEO}_qp${QP}.vvc > ${OUTPUT_DIR}/terminal_log_${VIDEO}_qp${QP}.txt
         
         # Verify if the C++ code successfully generated the coordinate log
         if [ -f "partition_log.csv" ]; then
-            # Rename the CSV to prevent it from being overwritten in the next loop
-            mv partition_log.csv ${VIDEO}_qp${QP}_partition.csv
-            echo "[SUCCESS] Generated: ${VIDEO}_qp${QP}_partition.csv"
-            echo "[SUCCESS] Captured terminal stats in: terminal_log_${VIDEO}_qp${QP}.txt"
+            mv partition_log.csv ${OUTPUT_DIR}/${VIDEO}_qp${QP}_partition.csv
+            
+            echo "[SUCCESS] Generated: ${OUTPUT_DIR}/${VIDEO}_qp${QP}_partition.csv"
+            echo "[SUCCESS] Captured terminal stats in: ${OUTPUT_DIR}/terminal_log_${VIDEO}_qp${QP}.txt"
         else
             echo "[ERROR] 'partition_log.csv' was not found! Check C++ injection."
         fi
@@ -51,5 +56,5 @@ for VIDEO in "${VIDEOS[@]}"; do
 done
 
 echo "========================================================"
-echo "[FINISHED] Task 1.4 Dry Run Completed Successfully!"
+echo "[FINISHED] Task 1.4 Encoding Completed!"
 echo "========================================================"

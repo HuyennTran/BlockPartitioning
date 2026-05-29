@@ -4,14 +4,13 @@ import numpy as np
 import cv2
 import subprocess
 import os
-import shutil
 import time
 import re
 import sys
+import matplotlib.pyplot as plt
 from pathlib import Path
 
 # --- FIX IMPORT PATH FOR UTILS ---
-# Resolve absolute path to the frontend directory to ensure utils can be imported
 frontend_dir = Path(__file__).resolve().parent.parent
 if str(frontend_dir) not in sys.path:
     sys.path.append(str(frontend_dir))
@@ -24,16 +23,15 @@ from utils.metrics_calculator import PartitionMetrics
 # ==========================================
 st.set_page_config(page_title="VVC Real-time Encoder", layout="wide")
 st.title("🚀 VVC Real-time Encoding & Dynamic Visualizer")
-st.markdown("Upload MP4 → VTM Encoder → Visualize QT-MTT Partitions")
+st.markdown("Upload MP4 → VTM Encoder → Visualize QT-MTT Partitions & Build R-D Curve")
 
 # ==========================================
-# 2. PATH SETUP - ABSOLUTE PATHS (KEY FIX!)
+# 2. PATH SETUP - ABSOLUTE PATHS
 # ==========================================
 PROJECT_ROOT = Path.cwd()
 ENCODER_PATH = PROJECT_ROOT / "backend" / "bin" / "EncoderApp"
 CONFIG_PATH = PROJECT_ROOT / "backend" / "cfg" / "encoder_randomaccess_vtm.cfg"
 
-# Use current directory for temp files (EncoderApp will find them)
 INPUT_MP4 = PROJECT_ROOT / "live_input.mp4"
 INPUT_YUV = PROJECT_ROOT / "live_input.yuv"
 OUTPUT_VVC = PROJECT_ROOT / "live_output.vvc"
@@ -85,7 +83,6 @@ def check_system():
 
 errors, warnings = check_system()
 
-# Display status
 if errors:
     st.error("### ❌ System Requirements Not Met:")
     for err in errors:
@@ -127,13 +124,12 @@ selected_qp = st.sidebar.selectbox(
 
 st.sidebar.divider()
 
-# Info
 st.sidebar.info("""
 **Process Overview:**
 1. Convert MP4 → YUV420
 2. Run VTM Encoder
 3. Extract partitions
-4. Visualize with overlays
+4. Build R-D curve
 
 ⏱️ Estimated time: 1-3 min
 """)
@@ -144,16 +140,13 @@ st.sidebar.info("""
 if uploaded_mp4 is not None:
     st.sidebar.success("MP4 loaded")
     
-    col1, col2, col3 = st.sidebar.columns(3)
+    col1, col2 = st.sidebar.columns(2)
     
     with col1:
         run_button = st.button("▶️ RUN", key="run", help="Start encoding")
     
     with col2:
         cleanup_button = st.button("🗑️ Clean", key="clean", help="Delete temp files")
-    
-    with col3:
-        pass
     
     if cleanup_button:
         cleanup_old_files()
@@ -162,9 +155,6 @@ if uploaded_mp4 is not None:
     
     if run_button:
         try:
-            # ─────────────────────────────────────────────
-            # STAGE 1: Save MP4
-            # ─────────────────────────────────────────────
             progress = st.progress(0)
             status = st.status("Processing Pipeline...", expanded=True)
             
@@ -177,15 +167,11 @@ if uploaded_mp4 is not None:
                 st.success(f"✓ Saved: {INPUT_MP4.name}")
                 progress.progress(25)
             
-            # ─────────────────────────────────────────────
-            # STAGE 2: Convert to YUV via FFmpeg
-            # ─────────────────────────────────────────────
             with status:
                 st.write("**Stage 2/4:** Converting MP4 → YUV420...")
                 
                 ffmpeg_cmd = [
-                    "ffmpeg",
-                    "-y",
+                    "ffmpeg", "-y",
                     "-i", str(INPUT_MP4),
                     "-vf", f"scale={WIDTH}:{HEIGHT}",
                     "-frames:v", str(TOTAL_FRAMES),
@@ -198,7 +184,7 @@ if uploaded_mp4 is not None:
                     capture_output=True,
                     text=True,
                     timeout=120,
-                    cwd=str(PROJECT_ROOT)  # KEY: Run from project root
+                    cwd=str(PROJECT_ROOT)
                 )
                 
                 if result.returncode != 0:
@@ -208,9 +194,6 @@ if uploaded_mp4 is not None:
                 st.success(f"✓ Created: {INPUT_YUV.name} ({INPUT_YUV.stat().st_size / 1e6:.1f} MB)")
                 progress.progress(50)
             
-            # ─────────────────────────────────────────────
-            # STAGE 3: Run VTM Encoder
-            # ─────────────────────────────────────────────
             with status:
                 st.write("**Stage 3/4:** Running VTM Encoder...")
                 st.write("⏳ This may take 1-2 minutes...")
@@ -232,7 +215,6 @@ if uploaded_mp4 is not None:
                 
                 st.code(" ".join(vtm_cmd), language="bash")
                 
-                # Capture execution time for Category 4: Encoding Metrics
                 start_time = time.time()
                 
                 result = subprocess.run(
@@ -240,7 +222,7 @@ if uploaded_mp4 is not None:
                     capture_output=True,
                     text=True,
                     timeout=180,
-                    cwd=str(PROJECT_ROOT)  # KEY: Run from project root
+                    cwd=str(PROJECT_ROOT)
                 )
                 
                 encoding_time = time.time() - start_time
@@ -258,7 +240,6 @@ if uploaded_mp4 is not None:
                     vtm_metrics["bitrate"] = float(match.group(1))
                     vtm_metrics["y_psnr"] = float(match.group(2))
                 
-                # Save quantitative metrics to session state
                 st.session_state['encoding_time'] = encoding_time
                 st.session_state['vtm_metrics'] = vtm_metrics
                 st.session_state['current_qp'] = selected_qp
@@ -270,9 +251,6 @@ if uploaded_mp4 is not None:
                 st.success(f"✓ Generated: {LIVE_CSV.name}")
                 progress.progress(75)
             
-            # ─────────────────────────────────────────────
-            # STAGE 4: Load data
-            # ─────────────────────────────────────────────
             with status:
                 st.write("**Stage 4/4:** Loading partition data...")
                 
@@ -302,10 +280,10 @@ if uploaded_mp4 is not None:
             st.code(traceback.format_exc(), language="python")
 
 # ==========================================
-# 7. VISUALIZATION & ANALYTICS DASHBOARD
+# 7. VISUALIZATION & R-D ANALYSIS
 # ==========================================
 st.divider()
-st.write("### 📊 Partition Visualization & Analytics")
+st.write("### 📊 Rate-Distortion (R-D) Analysis & Partition Visualization")
 
 if 'df' in st.session_state and 'input_yuv' in st.session_state:
     df = st.session_state['df']
@@ -313,20 +291,107 @@ if 'df' in st.session_state and 'input_yuv' in st.session_state:
     
     if os.path.exists(input_yuv):
         try:
-            # Initialize the metrics calculator module
             metrics_calc = PartitionMetrics(df)
             vtm_metrics = st.session_state.get('vtm_metrics', {"bitrate": 0, "y_psnr": 0})
             
             # ---------------------------------------------------------
-            # Category 4: Encoding Metrics (Global Level)
+            # R-D CURVE VISUALIZATION
             # ---------------------------------------------------------
-            st.subheader("🌍 Global Encoding Performance")
-            m_col1, m_col2, m_col3, m_col4 = st.columns(4)
-            m_col1.metric("Target QP", st.session_state.get('current_qp', 'N/A'))
-            m_col2.metric("Processing Time", f"{st.session_state.get('encoding_time', 0):.2f} s")
-            m_col3.metric("Bitrate (kbps)", vtm_metrics.get('bitrate', 'N/A'))
-            m_col4.metric("Y-PSNR (dB)", vtm_metrics.get('y_psnr', 'N/A'))
+            st.subheader("📈 Build R-D Curve")
+            
+            # Store current encoding result in session state
+            if 'rd_points' not in st.session_state:
+                st.session_state['rd_points'] = []
+            
+            current_qp = st.session_state.get('current_qp', 'N/A')
+            bitrate = vtm_metrics.get('bitrate', 0)
+            psnr = vtm_metrics.get('y_psnr', 0)
+            
+            if bitrate != 'N/A' and psnr != 'N/A' and bitrate != 0 and psnr != 0:
+                # Check if this QP already exists
+                existing_points = [p for p in st.session_state['rd_points'] if p['qp'] == current_qp]
+                
+                if not existing_points:
+                    st.session_state['rd_points'].append({
+                        'qp': current_qp,
+                        'bitrate': bitrate,
+                        'psnr': psnr
+                    })
+                    st.success(f"✓ Added QP {current_qp} to R-D curve (Bitrate: {bitrate:.2f} kbps, PSNR: {psnr:.2f} dB)")
+                else:
+                    st.info(f"QP {current_qp} already in R-D curve. Click 'Clear R-D Data' to replace it.")
+            
+            # Display R-D curve
+            if st.session_state['rd_points']:
+                rd_df = pd.DataFrame(st.session_state['rd_points'])
+                rd_df = rd_df.sort_values('bitrate')
+                
+                rd_col1, rd_col2 = st.columns([3, 1])
+                
+                with rd_col1:
+                    # Create scatter plot
+                    fig, ax = plt.subplots(figsize=(12, 6))
+                    
+                    ax.scatter(rd_df['bitrate'], rd_df['psnr'], s=200, color='#FF6B6B', 
+                              edgecolors='#C92A2A', linewidth=2.5, zorder=3, alpha=0.8)
+                    
+                    # Add QP labels to points
+                    for idx, row in rd_df.iterrows():
+                        ax.annotate(f"QP {int(row['qp'])}", 
+                                   (row['bitrate'], row['psnr']),
+                                   xytext=(8, 8), textcoords='offset points',
+                                   fontsize=11, weight='bold',
+                                   bbox=dict(boxstyle='round,pad=0.4', facecolor='yellow', alpha=0.4))
+                    
+                    # Connect points with line
+                    ax.plot(rd_df['bitrate'], rd_df['psnr'], 'k--', alpha=0.3, linewidth=1.5)
+                    
+                    ax.set_xlabel('Bitrate (kbps)', fontsize=12, weight='bold')
+                    ax.set_ylabel('Y-PSNR (dB)', fontsize=12, weight='bold')
+                    ax.set_title('Rate-Distortion Trade-off', fontsize=13, weight='bold')
+                    ax.grid(True, alpha=0.3, linestyle='--')
+                    ax.set_axisbelow(True)
+                    
+                    plt.tight_layout()
+                    st.pyplot(fig)
+                
+                with rd_col2:
+                    st.markdown("**R-D Points**")
+                    display_df = rd_df[['qp', 'bitrate', 'psnr']].copy()
+                    display_df.columns = ['QP', 'Bitrate (kbps)', 'PSNR (dB)']
+                    display_df = display_df.sort_values('QP')
+                    display_df['Bitrate (kbps)'] = display_df['Bitrate (kbps)'].round(2)
+                    display_df['PSNR (dB)'] = display_df['PSNR (dB)'].round(2)
+                    st.dataframe(display_df, use_container_width=True, hide_index=True)
+                    
+                    # Calculate efficiency
+                    if len(rd_df) > 1:
+                        st.markdown("**Efficiency (dB/kbps)**")
+                        rd_sorted = rd_df.sort_values('bitrate')
+                        br_diff = rd_sorted['bitrate'].diff().fillna(1)
+                        psnr_diff = rd_sorted['psnr'].diff().fillna(0)
+                        efficiency = (psnr_diff / br_diff).fillna(0)
+                        
+                        eff_df = rd_sorted.copy()
+                        eff_df['Efficiency'] = efficiency
+                        eff_display = eff_df[['qp', 'Efficiency']].copy()
+                        eff_display.columns = ['QP', 'dB/kbps']
+                        eff_display['dB/kbps'] = eff_display['dB/kbps'].round(3)
+                        st.dataframe(eff_display, use_container_width=True, hide_index=True)
+                
+                # Clear button for R-D data
+                if st.button("🗑️ Clear R-D Data", key="clear_rd", use_container_width=True):
+                    st.session_state['rd_points'] = []
+                    st.rerun()
+            else:
+                st.info("💡 Encode the same video with different QP values (22, 27, 32, 37) to build the R-D curve")
+            
             st.divider()
+            
+            # ---------------------------------------------------------
+            # PARTITION VISUALIZATION
+            # ---------------------------------------------------------
+            st.subheader("👁️ Partition Visualization & Structure Analysis")
             
             available_pocs = sorted(df['POC'].unique())
             
@@ -369,7 +434,6 @@ if 'df' in st.session_state and 'input_yuv' in st.session_state:
                         }
                         color = colors.get(total_depth, (0, 0, 255))
                         
-                        # Draw
                         cv2.rectangle(
                             partition_bgr,
                             (x, y),
@@ -381,60 +445,76 @@ if 'df' in st.session_state and 'input_yuv' in st.session_state:
                     original_rgb = cv2.cvtColor(original_bgr, cv2.COLOR_BGR2RGB)
                     partition_rgb = cv2.cvtColor(partition_bgr, cv2.COLOR_BGR2RGB)
                     
-                    # ---------------------------------------------------------
-                    # Category Qualitative: Perception Comparison & Visual Artifacts
-                    # ---------------------------------------------------------
-                    st.subheader("👁️ Qualitative Analysis (Perceptual vs. Structural)")
                     img_col1, img_col2 = st.columns(2)
                     
                     with img_col1:
-                        st.markdown("**Original Reconstructed Frame**")
+                        st.markdown("**Reconstructed Frame**")
                         st.image(original_rgb, caption=f"Frame {selected_poc}", use_column_width=True)
                     
                     with img_col2:
-                        st.markdown("**VVC Partition Overlay**")
+                        st.markdown("**VVC Partition Overlay (QP {})** — Color by depth".format(selected_qp))
                         st.image(partition_rgb, caption=f"Frame {selected_poc}", use_column_width=True)
                     
-                    st.info("💡 **Visual Artifacts Insight:** Compare the structural overlay with the perceptual image. VVC's Rate-Distortion optimization dynamically deploys small rectangular blocks around high-motion boundaries, while grouping flat backgrounds into large blocks. Observe blocking artifacts in the reconstructed frame at high QPs.")
-                    
                     # ---------------------------------------------------------
-                    # Category 1 & 2: Frame-Level Structure and Type Metrics
+                    # FRAME-LEVEL PARTITION METRICS
                     # ---------------------------------------------------------
-                    st.subheader("📈 Frame-Level Analytics")
+                    st.subheader("📊 Frame Partition Analysis")
                     
                     frame_stats = metrics_calc.get_frame_stats(selected_poc)
                     
-                    stat_col1, stat_col2, stat_col3 = st.columns(3)
+                    stat_col1, stat_col2, stat_col3, stat_col4 = st.columns(4)
+                    
                     with stat_col1:
-                        st.metric("Total Coding Units (CUs)", frame_stats.get('total_cus', len(df_frame)))
-                        st.metric("QT Max Depth", frame_stats.get('max_qt_depth', int(df_frame['QT_Depth'].max())))
-                        st.metric("MTT Max Depth", frame_stats.get('max_mtt_depth', int(df_frame['MT_Depth'].max())))
+                        st.metric("Coding Units", frame_stats.get('total_cus', 0))
+                        st.metric("Avg Block Size (px)", f"{frame_stats.get('avg_block_size', 0):.1f}")
                     
                     with stat_col2:
-                        st.markdown("**Block Type Breakdown (QT vs MTT)**")
-                        # Fetch shape counts if available in updated calculator, otherwise fallback to dataframe calculation
-                        square_count = frame_stats.get('square_count', len(df_frame[df_frame['W'] == df_frame['H']]))
-                        rect_count = frame_stats.get('rect_count', len(df_frame[df_frame['W'] != df_frame['H']]))
-                        
-                        st.write(f"- 🔲 Square (Quadtree): {square_count}")
-                        st.write(f"- ▯ Rectangular (Multi-Type Tree): {rect_count}")
-                        if len(df_frame) > 0:
-                            st.progress(rect_count / len(df_frame))
-                            
-                    with stat_col3:
-                        st.markdown("**Prediction Mode Ratio**")
-                        intra_c = frame_stats.get('intra_count', len(df_frame[df_frame['Mode'] == 0]))
-                        inter_c = frame_stats.get('inter_count', len(df_frame[df_frame['Mode'] == 1]))
-                        
-                        st.write(f"- 🔴 Intra CUs (Mode 0): {intra_c}")
-                        st.write(f"- 🔵 Inter CUs (Mode 1): {inter_c}")
-                        if len(df_frame) > 0:
-                            st.progress(intra_c / len(df_frame))
+                        st.metric("Square Blocks", frame_stats.get('square_count', 0))
+                        st.metric("Rectangular Blocks", frame_stats.get('rect_count', 0))
                     
-                    # Category 1: Block Size Distribution Bar Chart
+                    with stat_col3:
+                        st.metric("Intra CUs", frame_stats.get('intra_count', 0))
+                        st.metric("Inter CUs", frame_stats.get('inter_count', 0))
+                    
+                    with stat_col4:
+                        st.metric("Max QT Depth", frame_stats.get('max_qt_depth', 0))
+                        st.metric("Max MTT Depth", frame_stats.get('max_mtt_depth', 0))
+                    
+                    # Block size distribution
                     st.markdown("**Block Size Distribution**")
                     block_sizes = df_frame['W'].astype(str) + 'x' + df_frame['H'].astype(str)
                     st.bar_chart(block_sizes.value_counts())
+                    
+                    # ---------------------------------------------------------
+                    # GLOBAL PARTITION STATISTICS
+                    # ---------------------------------------------------------
+                    st.subheader("🌍 Global Partition Statistics (All Frames)")
+                    
+                    global_summary = metrics_calc.get_global_summary()
+                    
+                    global_col1, global_col2, global_col3 = st.columns(3)
+                    
+                    with global_col1:
+                        st.metric("Total Frames", global_summary['total_frames'])
+                        st.metric("Total CUs", global_summary['total_cus'])
+                        st.metric("CUs per Frame", f"{global_summary['cus_per_frame']:.1f}")
+                    
+                    with global_col2:
+                        st.metric("Total Square Blocks", global_summary['square_blocks'])
+                        st.metric("Total Rect Blocks", global_summary['rect_blocks'])
+                        rect_ratio = (global_summary['rect_blocks'] / global_summary['total_cus'] * 100) if global_summary['total_cus'] > 0 else 0
+                        st.metric("MTT Ratio", f"{rect_ratio:.1f}%")
+                    
+                    with global_col3:
+                        st.metric("Total Intra CUs", global_summary['intra_blocks'])
+                        st.metric("Total Inter CUs", global_summary['inter_blocks'])
+                        st.metric("Intra Ratio", f"{global_summary['intra_ratio']:.1f}%")
+                    
+                    # Average block size trend
+                    st.markdown("**Average Block Size per Frame**")
+                    avg_size = df.groupby('POC').apply(lambda x: (x['W'] * x['H']).mean()).reset_index()
+                    avg_size.columns = ['POC', 'Avg Block Size']
+                    st.line_chart(avg_size.set_index('POC')['Avg Block Size'])
         
         except Exception as e:
             st.error(f"❌ Visualization error: {e}")
@@ -448,20 +528,26 @@ else:
     ### Getting Started
     
     1. **Upload** an MP4 video (16:9 recommended)
-    2. **Select** QP value (lower = better quality)
+    2. **Select** QP value (lower = better quality, higher bitrate)
     3. **Click** ▶️ RUN button
     4. **Wait** for processing (1-3 min)
-    5. **Browse** frames with slider
+    5. **Repeat with different QP values** to build R-D curve
     
-    ### Color Legend
+    ### Build R-D Curve
+    - Encode the same video multiple times with different QP values
+    - Each encoding adds a point to the R-D curve
+    - Compare rate-distortion efficiency across QP values
+    
+    ### Color Legend (Partition Depth)
     - 🔲 White (Depth 0-1): Large 64x64 blocks
-    - 🟢 Green (Depth 2): 32x32 blocks
+    - 🟡 Cyan (Depth 1-2): 32x32 blocks
+    - 🟢 Green (Depth 2): Medium blocks
     - 🟠 Orange (Depth 3): 16x16 blocks
     - 🔴 Red (Depth 4+): Small 4x8, 8x4 blocks
     """)
 
 # ==========================================
-# 8. DEBUG INFO (Optional)
+# 8. DEBUG INFO
 # ==========================================
 with st.expander("🔧 Debug Info"):
     st.write(f"**Project Root:** {PROJECT_ROOT}")
